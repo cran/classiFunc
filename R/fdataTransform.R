@@ -10,11 +10,11 @@
 #'
 #' @param grid,nderiv,derived,evenly.spaced,no.missing,deriv.method see
 #' \code{\link{classiKnn}}
-#' @param ... additional arguments to fda::Data2fd
+#' @param ... additional arguments to fda::smooth.basis
 #' @return Pipeline function taking one argument \code{fdata}. The returned
 #' function carries out all the preprocessing needed for the calling model
 #' of class \code{\link{classiKnn}}.
-#'
+#' @importFrom fda create.bspline.basis smooth.basis deriv.fd eval.fd
 #' @export
 fdataTransform = function(grid, nderiv, derived, evenly.spaced,
                           no.missing, deriv.method, ...) {
@@ -22,10 +22,13 @@ fdataTransform = function(grid, nderiv, derived, evenly.spaced,
     # original data can be used if no derivation or filling of missing values
     # or respacing is necessary
     return(function(fdata) fdata)
-  } else if (evenly.spaced & no.missing & deriv.method == "base.diff") {
+  } else if (evenly.spaced & deriv.method == "base.diff") {
     # fast derivation using base::diff
     return(function(fdata) {
-      for(i in 1:nderiv) {
+      if (!no.missing) {
+        fdata = t(apply(fdata, 1, zoo::na.spline))
+      }
+      for (i in 1:nderiv) {
         fdata = t(apply(fdata, 1, diff))
       }
       fdata
@@ -33,8 +36,15 @@ fdataTransform = function(grid, nderiv, derived, evenly.spaced,
   } else {
     # create a preprocessing function
     return(function(fdata){
-      # get basis representation, fill NAs and derive the data
-      fda.fdata = fda::Data2fd(argvals = grid, t(fdata), ...)
+      # get basis representation,
+      # fill NAs (FIXME, this does not work, used else if instead)
+      # and derive the data
+      if (!no.missing) {
+        fdata = t(apply(fdata, 1, zoo::na.spline))
+      }
+      basis = fda::create.bspline.basis(rangeval = range(grid))
+      fda.fdata = fda::smooth.basis(argvals = grid, y = t(fdata),
+                                    fdParobj = basis, ...)$fd
       if (!(derived | nderiv == 0L)) {
         fda.fdata = fda::deriv.fd(fda.fdata, nderiv = nderiv)
       }

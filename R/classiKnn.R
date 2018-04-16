@@ -40,7 +40,7 @@
 #' only used if \code{deriv.method = "custom.method"}.
 #' A function of functional observations
 #' \code{x} and \code{y} returning their distance.
-#' The default is the Euclidean distance.
+#' The default is the L2 distance.
 #' See how to implement your distance function in \code{\link[proxy]{dist}}.
 #' @param ...
 #' further arguments to and from other methods. Hand over additional arguments to
@@ -96,7 +96,7 @@
 #' # create functional data as matrix with observations as rows
 #' fdata = Phoneme[,!colnames(Phoneme) == "target"]
 #'
-#' # create k = 3 nearest neighbors classifier with Euclidean distance (default) of the
+#' # create k = 3 nearest neighbors classifier with L2 distance (default) of the
 #' # first order derivative of the data
 #' mod = classiKnn(classes = classes[train_inds], fdata = fdata[train_inds,],
 #'                  nderiv = 1L, knn = 3L)
@@ -104,10 +104,18 @@
 #' # predict the model for the test set
 #' pred = predict(mod, newdata =  fdata[test_inds,], predict.type = "prob")
 #'
+#' \dontrun{
+#' # Parallelize across 2 CPU's
+#' library(parallelMap)
+#' parallelStartSocket(cpus = 2L) # parallelStartMulticore(cpus = 2L) for Linux
+#' predict(mod, newdata =  fdata[test_inds,], predict.type = "prob", parallel = TRUE, batches = 2L)
+#' parallelStop()
+#' }
+#'
 #' @seealso \link{predict.classiKnn}
 #' @export
 classiKnn = function(classes, fdata, grid = 1:ncol(fdata), knn = 1L,
-                     metric = "Euclidean", nderiv = 0L, derived = FALSE,
+                     metric = "L2", nderiv = 0L, derived = FALSE,
                      deriv.method = "base.diff",
                      custom.metric = function(x, y, ...) {
                        return(sqrt(sum((x - y) ^ 2)))
@@ -129,19 +137,19 @@ classiKnn = function(classes, fdata, grid = 1:ncol(fdata), knn = 1L,
   assertChoice(deriv.method, c("base.diff", "fda.deriv.fd"))
 
   # check if data is evenly spaced  -> respace
-  evenly.spaced = all.equal(grid, seq(grid[1], grid[length(grid)],
+  evenly.spaced = isTRUE(all.equal(grid, seq(grid[1], grid[length(grid)],
                                       length.out = length(grid)),
-                            check.attributes = FALSE)
+                            check.attributes = FALSE))
   no.missing = !anyMissing(fdata)
 
-  # TODO write better warning message
+  # warning message for imputation
   if (!no.missing) {
     warning("There are missing values in fdata. They will be filled using a spline representation!")
   }
 
   # create a model specific preprocessing function for the data
   # here the data will be derived, respaced equally and missing values will be filled
-  this.fdataTransform = fdataTransform(fdata = fdata, grid = grid,
+  this.fdataTransform = fdataTransform(grid = grid,
                                        nderiv = nderiv, derived = derived,
                                        evenly.spaced = evenly.spaced,
                                        no.missing = no.missing,
@@ -183,12 +191,17 @@ classiKnn = function(classes, fdata, grid = 1:ncol(fdata), knn = 1L,
 #'   most predicted class.
 #'   Choose 'prob' to return a matrix with \code{nrow(newdata)} rows containing
 #'   the probabilities for the classes as columns.
+#' @param parallel [\code{logical(1)}]\cr
+#'   Should the prediction be parallelized?
+#'   Uses \code{\link[parallelMap]{parallelMap}} for
+#'   parallelization. See \code{...} for further arguments.
 #' @param ... [\code{list}]\cr
-#'   additional arguments to \link{computeDistMat}.
+#'   additional arguments to \link[classiFunc]{computeDistMat}.
 #'
 #' @seealso classiKnn
 #' @export
-predict.classiKnn = function(object, newdata = NULL, predict.type = "response", ...) {
+predict.classiKnn = function(object, newdata = NULL, predict.type = "response",
+                             parallel = FALSE, ...) {
   # input checking
   if (!is.null(newdata)) {
     if (class(newdata) == "data.frame")
@@ -201,10 +214,16 @@ predict.classiKnn = function(object, newdata = NULL, predict.type = "response", 
   # create distance metric
   # note, that additional arguments from the original model are handed over
   # to computeDistMat using object$call$...
-  dist.mat = do.call("computeDistMat", c(list(x = object$proc.fdata, y = newdata,
-                                              method = object$metric,
-                                              custom.metric = object$custom.metric, ...),
-                                         object$call$...))
+  if (parallel) {
+    distfun = "parallelComputeDistMat"
+  } else {
+    distfun = "computeDistMat"
+  }
+  dist.mat = do.call(distfun, c(list(x = object$proc.fdata, y = newdata,
+                                     method = object$metric,
+                                     custom.metric = object$custom.metric, ...),
+                                object$call$...))
+
 
   # matrix containing which nearest neighbor the training observation is
   # for the new observation
@@ -235,7 +254,7 @@ print.classiKnn = function(x, ...) {
   cat("", nrow(x$fdata), "observations of length", ncol(x$fdata), "\n")
   cat("algorithm: \n")
   cat(" metric =", x$metric, "\n")
-  cat(" k = ", x$knn, "\n")
+  cat(" knn = ", x$knn, "\n")
   cat(" nderiv =", x$nderiv, "\n")
   cat("\n")
 }
